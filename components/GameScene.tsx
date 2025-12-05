@@ -1,8 +1,9 @@
+
 import React, { useRef, useEffect, useState, useMemo } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import { Stars, Sky, Cloud, Sparkles, Environment } from '@react-three/drei';
+import { Stars, Sky, Cloud, Sparkles, Environment, Loader } from '@react-three/drei';
 import * as THREE from 'three';
-import { GameState, TrainState, WeatherState } from '../types';
+import { GameState, TrainState, WeatherState, PlayerMode } from '../types';
 
 // --- Constants & Config ---
 const WORLD_SIZE = 10000;
@@ -751,7 +752,7 @@ const TowerStand: React.FC<{position: [number,number,number], color:string}> = (
          {/* Audience Sparkles */}
          <Sparkles position={[0, 55, 0]} count={40} scale={[6, 10, 6]} size={4} speed={0.4} opacity={0.8} color={color} />
     </group>
-);
+  );
 
 const QuidditchPitch = () => {
   const towers = useMemo(() => {
@@ -1076,76 +1077,135 @@ const Carriage = ({ zOffset }: { zOffset: number }) => {
     )
 }
 
-// --- Player (Wizard on Broom) ---
-const WizardPlayer = React.forwardRef<THREE.Group>((props, ref) => {
-  return (
-    <group ref={ref} {...props}>
-      {/* Rotate to face -Z (Forward) */}
-      <group rotation={[0, Math.PI, 0]}>
-        
-        {/* Broom Stick */}
-        <mesh position={[0, 0, 0]} rotation={[Math.PI / 2, 0, 0]} castShadow>
-            <cylinderGeometry args={[0.08, 0.05, 3.5, 8]} />
-            <meshStandardMaterial color="#4a3c31" />
-        </mesh>
-        
-        {/* Tail */}
-        <mesh position={[0, 0, 1.8]} rotation={[Math.PI / 2, 0, 0]} castShadow>
-            <cylinderGeometry args={[0.05, 0.4, 1.2, 16]} />
-            <meshStandardMaterial color="#654321" />
-        </mesh>
+// --- Player (Wizard on Broom/Foot) ---
+interface WizardProps {
+    mode: PlayerMode;
+}
+const WizardPlayer = React.forwardRef<THREE.Group, WizardProps>(({ mode }, ref) => {
+    const groupRef = useRef<THREE.Group>(null);
+    const bodyRef = useRef<THREE.Group>(null);
+    const broomRef = useRef<THREE.Group>(null);
 
-        {/* Wizard */}
-        <mesh position={[0, 0.6, 0.2]} rotation={[0.2, 0, 0]} castShadow>
-            <cylinderGeometry args={[0.3, 0.4, 1.2, 8]} />
-            <meshStandardMaterial color="#1a1a2e" />
-        </mesh>
+    useFrame((state, delta) => {
+        if (!bodyRef.current || !broomRef.current) return;
         
-        <mesh position={[0, 1.3, 0.3]} castShadow>
-            <sphereGeometry args={[0.25, 16, 16]} />
-            <meshStandardMaterial color="#ffdbac" />
-        </mesh>
+        // --- Smooth Animation Transitions ---
         
-        <group position={[0, 1.5, 0.3]} rotation={[-0.2, 0, 0]}>
-             <mesh castShadow>
-                <coneGeometry args={[0.35, 0.8, 16]} />
-                <meshStandardMaterial color="#111" />
-             </mesh>
-             <mesh position={[0, -0.35, 0]} castShadow>
-                <cylinderGeometry args={[0.6, 0.6, 0.05, 16]} />
-                <meshStandardMaterial color="#111" />
-             </mesh>
-        </group>
+        // Lean: Flying leans forward (1.5 rad approx), Walking stays upright (0 rad)
+        // But the parent container handles some rotation for flying physics.
+        // Here we handle the local posture.
         
-        <mesh position={[0, 0.6, 0.8]} rotation={[-0.4, 0, 0]}>
-            <boxGeometry args={[0.7, 1.0, 0.05]} />
-            <meshStandardMaterial color="#1a1a2e" side={THREE.DoubleSide} />
-        </mesh>
+        const isFlying = mode === PlayerMode.FLY;
+        
+        // Posture
+        const targetBodyRotX = isFlying ? 1.4 : 0; 
+        // When flying, the physics rotates the whole container X.
+        // Actually, in our physics loop, we rotate the container 'playerRef' X based on pitch.
+        // So for the model itself:
+        // Flying: The broom is horizontal, wizard sits on it.
+        // Walking: The broom is vertical on back, wizard stands.
+        
+        // Let's rely on the physics controller to orient the *Group* for flying direction.
+        // Here we adjust the *local* parts.
+        
+        // Broom Position
+        // Flying: Underneath [0, 0, 0], Horizontal
+        // Walking: On Back [0, 1, -0.5], Vertical
+        const targetBroomPos = isFlying ? new THREE.Vector3(0, 0, 0) : new THREE.Vector3(0, 1.2, -0.5);
+        const targetBroomRotX = isFlying ? Math.PI / 2 : 0; // Cylinder is Y-up default?
+        // Our broom geom: Cylinder args=[..., height=3.5]. 
+        // In original code: rotation={[Math.PI / 2, 0, 0]} makes it Z-aligned (forward).
+        // Walking: We want it Y-aligned (Vertical).
+        const finalBroomRotX = isFlying ? Math.PI / 2 : 0; 
 
-        <group position={[0, 0, 2.5]}>
-            <Sparkles count={20} scale={1.5} size={3} speed={0.4} opacity={0.5} color="#cebaff" />
+        broomRef.current.position.lerp(targetBroomPos, delta * 5);
+        broomRef.current.rotation.x = THREE.MathUtils.lerp(broomRef.current.rotation.x, finalBroomRotX, delta * 5);
+        
+        // Wizard Leg Position (Simplified by just moving the cylinder body)
+        // Flying: Sitting [0, 0.6, 0.2], Leaning slightly
+        // Walking: Standing [0, 1.0, 0], Upright
+        const targetBodyPos = isFlying ? new THREE.Vector3(0, 0.6, 0.2) : new THREE.Vector3(0, 1.0, 0);
+        const targetBodyRot = isFlying ? 0.2 : 0;
+
+        bodyRef.current.position.lerp(targetBodyPos, delta * 5);
+        bodyRef.current.rotation.x = THREE.MathUtils.lerp(bodyRef.current.rotation.x, targetBodyRot, delta * 5);
+    });
+
+    return (
+        <group ref={ref}>
+            <group ref={groupRef} rotation={[0, Math.PI, 0]}>
+                
+                {/* Broom Stick */}
+                <group ref={broomRef}>
+                    <mesh castShadow>
+                        <cylinderGeometry args={[0.08, 0.05, 3.5, 8]} />
+                        <meshStandardMaterial color="#4a3c31" />
+                    </mesh>
+                    <mesh position={[0, -1.8, 0]} castShadow> {/* Tail relative to stick */}
+                        <cylinderGeometry args={[0.05, 0.4, 1.2, 16]} />
+                        <meshStandardMaterial color="#654321" />
+                    </mesh>
+                    {/* Particles only when flying */}
+                    {mode === PlayerMode.FLY && (
+                         <group position={[0, -2.5, 0]}>
+                            <Sparkles count={20} scale={1.5} size={3} speed={0.4} opacity={0.5} color="#cebaff" />
+                        </group>
+                    )}
+                </group>
+
+                {/* Wizard */}
+                <group ref={bodyRef}>
+                    <mesh castShadow>
+                        <cylinderGeometry args={[0.3, 0.4, 1.2, 8]} />
+                        <meshStandardMaterial color="#1a1a2e" />
+                    </mesh>
+                    
+                    {/* Head */}
+                    <mesh position={[0, 0.8, 0]} castShadow>
+                        <sphereGeometry args={[0.25, 16, 16]} />
+                        <meshStandardMaterial color="#ffdbac" />
+                    </mesh>
+                    
+                    {/* Hat */}
+                    <group position={[0, 1.0, 0]} rotation={[-0.2, 0, 0]}>
+                        <mesh castShadow>
+                            <coneGeometry args={[0.35, 0.8, 16]} />
+                            <meshStandardMaterial color="#111" />
+                        </mesh>
+                        <mesh position={[0, -0.35, 0]} castShadow>
+                            <cylinderGeometry args={[0.6, 0.6, 0.05, 16]} />
+                            <meshStandardMaterial color="#111" />
+                        </mesh>
+                    </group>
+                    
+                    {/* Cape */}
+                    <mesh position={[0, 0, 0.35]} rotation={[-0.1, 0, 0]}>
+                        <boxGeometry args={[0.7, 1.0, 0.05]} />
+                        <meshStandardMaterial color="#1a1a2e" side={THREE.DoubleSide} />
+                    </mesh>
+                </group>
+            </group>
+            
+            {/* Lumos Light */}
+            <pointLight intensity={3} distance={25} color="#aaddff" position={[0, 2, -1]} />
         </group>
-      </group>
-      
-      {/* Lumos Light */}
-      <pointLight intensity={3} distance={25} color="#aaddff" position={[0, 2, -1]} />
-    </group>
   );
 });
 
-// --- Physics/Flight Controller ---
-const FlightController = () => {
+// --- Physics/Player Controller ---
+const PlayerController = () => {
   const playerRef = useRef<THREE.Group>(null);
-  const velocity = useRef(new THREE.Vector3());
-  const speed = useRef(0);
+  const velocity = useRef(new THREE.Vector3()); // X=Speed, Y=Vertical Velocity (Gravity), Z=Unused
+  const [mode, setMode] = useState<PlayerMode>(PlayerMode.FLY);
+  
   const { camera } = useThree();
-  const [active, setActive] = useState(false);
   const treeData = useMemo(() => getTreeData(), []);
 
   const keys = useRef({
     w: false, a: false, s: false, d: false, 
-    shift: false, control: false, space: false
+    shift: false, control: false, space: false, q: false
   });
+  const prevQ = useRef(false);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -1154,6 +1214,7 @@ const FlightController = () => {
       if (k === 'a') keys.current.a = true;
       if (k === 's') keys.current.s = true;
       if (k === 'd') keys.current.d = true;
+      if (k === 'q') keys.current.q = true;
       if (e.shiftKey) keys.current.shift = true;
       if (e.ctrlKey) keys.current.control = true;
       if (e.code === 'Space') keys.current.space = true;
@@ -1164,13 +1225,13 @@ const FlightController = () => {
       if (k === 'a') keys.current.a = false;
       if (k === 's') keys.current.s = false;
       if (k === 'd') keys.current.d = false;
+      if (k === 'q') keys.current.q = false;
       keys.current.shift = e.shiftKey;
       keys.current.control = e.ctrlKey;
       if (e.code === 'Space') keys.current.space = false;
     };
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
-    setActive(true);
     return () => {
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
@@ -1178,79 +1239,122 @@ const FlightController = () => {
   }, []);
 
   useFrame((state, delta) => {
-    if (!playerRef.current || !active) return;
+    if (!playerRef.current) return;
     const player = playerRef.current;
 
-    const ACCELERATION = 40.0;
-    const MAX_SPEED = keys.current.space ? 120.0 : 60.0;
-    const ROTATION_SPEED = 2.5;
-    const VERTICAL_SPEED = 30.0;
-
-    // Rotation
-    if (keys.current.a) player.rotation.y += ROTATION_SPEED * delta;
-    if (keys.current.d) player.rotation.y -= ROTATION_SPEED * delta;
-
-    // Speed
-    let targetSpeed = 0;
-    if (keys.current.w) targetSpeed = MAX_SPEED;
-    if (keys.current.s) targetSpeed = -MAX_SPEED * 0.5;
-    
-    speed.current = THREE.MathUtils.lerp(speed.current, targetSpeed, delta * 2);
-
-    // Movement Vector
-    const forward = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), player.rotation.y);
-    const displacement = forward.clone().multiplyScalar(speed.current * delta);
-    
-    let verticalMove = 0;
-    if (keys.current.shift) verticalMove = VERTICAL_SPEED * delta;
-    if (keys.current.control) verticalMove = -VERTICAL_SPEED * delta;
-
-    const nextPos = player.position.clone().add(displacement);
-    nextPos.y += verticalMove;
-
-    // --- Collision ---
-    let collision = false;
-
-    // 1. Terrain
-    const terrainHeight = getTerrainHeight(nextPos.x, nextPos.z);
-    if (nextPos.y < terrainHeight + 2) {
-      nextPos.y = terrainHeight + 2;
-      if (verticalMove < 0) speed.current *= 0.8;
+    // --- Toggle Mode ---
+    if (keys.current.q && !prevQ.current) {
+        setMode(prev => prev === PlayerMode.FLY ? PlayerMode.WALK : PlayerMode.FLY);
+        // Reset vertical velocity when switching to avoid huge jumps
+        velocity.current.y = 0; 
     }
+    prevQ.current = keys.current.q;
 
-    // 2. Castle
-    const distToCastle = Math.sqrt((nextPos.x - CASTLE_POS[0])**2 + (nextPos.z - CASTLE_POS[2])**2);
-    if (distToCastle < 60 && nextPos.y < CASTLE_POS[1] + 80) collision = true;
+    // --- Physics Logic ---
+    const ROTATION_SPEED = 2.5;
 
-    // 3. Trees (Simplified check)
-    if (Math.abs(nextPos.x - FOREST_POS[0]) < 500 && Math.abs(nextPos.z - FOREST_POS[2]) < 500) {
-        for (const tree of treeData) {
-            const dx = nextPos.x - tree.position.x;
-            const dz = nextPos.z - tree.position.z;
-            const dist = Math.sqrt(dx*dx + dz*dz);
-            if (dist < 3 * (tree.scale * 0.5) && nextPos.y < tree.position.y + (tree.scale * 8)) {
-                collision = true;
-                break;
+    if (mode === PlayerMode.FLY) {
+        // === FLYING PHYSICS ===
+        
+        const MAX_SPEED = keys.current.space ? 120.0 : 60.0;
+        const VERTICAL_SPEED = 30.0;
+
+        // Rotation
+        if (keys.current.a) player.rotation.y += ROTATION_SPEED * delta;
+        if (keys.current.d) player.rotation.y -= ROTATION_SPEED * delta;
+
+        // Speed (stored in velocity.x for flying)
+        let targetSpeed = 0;
+        if (keys.current.w) targetSpeed = MAX_SPEED;
+        if (keys.current.s) targetSpeed = -MAX_SPEED * 0.5;
+        
+        velocity.current.x = THREE.MathUtils.lerp(velocity.current.x, targetSpeed, delta * 2);
+
+        // Movement Vector
+        const forward = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), player.rotation.y);
+        const displacement = forward.clone().multiplyScalar(velocity.current.x * delta);
+        
+        let verticalMove = 0;
+        if (keys.current.shift) verticalMove = VERTICAL_SPEED * delta;
+        if (keys.current.control) verticalMove = -VERTICAL_SPEED * delta;
+
+        const nextPos = player.position.clone().add(displacement);
+        nextPos.y += verticalMove;
+
+        // Terrain Collision (Bounce)
+        const terrainHeight = getTerrainHeight(nextPos.x, nextPos.z);
+        if (nextPos.y < terrainHeight + 2) {
+            nextPos.y = terrainHeight + 2;
+            if (verticalMove < 0) velocity.current.x *= 0.8;
+        }
+        
+        player.position.copy(nextPos);
+
+        // Visual Banking
+        if(player.children[0]) {
+            const targetTilt = keys.current.a ? 0.6 : (keys.current.d ? -0.6 : 0);
+            const targetPitch = keys.current.w ? 0.3 : (keys.current.s ? -0.1 : 0);
+            // Access the inner group (WizardPlayer group)
+            const inner = player.children[0] as THREE.Group; 
+            inner.rotation.z = THREE.MathUtils.lerp(inner.rotation.z, targetTilt, delta * 4);
+            inner.rotation.x = THREE.MathUtils.lerp(inner.rotation.x, targetPitch, delta * 4);
+        }
+
+    } else {
+        // === WALKING PHYSICS ===
+        const WALK_SPEED = 15.0;
+        const RUN_SPEED = 30.0;
+        const GRAVITY = 80.0;
+        const JUMP_FORCE = 30.0;
+
+        // Rotation
+        if (keys.current.a) player.rotation.y += ROTATION_SPEED * delta;
+        if (keys.current.d) player.rotation.y -= ROTATION_SPEED * delta;
+
+        // Speed
+        const speed = keys.current.space ? RUN_SPEED : WALK_SPEED;
+        let moveForward = 0;
+        if (keys.current.w) moveForward = speed;
+        if (keys.current.s) moveForward = -speed;
+
+        const forward = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), player.rotation.y);
+        const displacement = forward.clone().multiplyScalar(moveForward * delta);
+        
+        const nextPos = player.position.clone().add(displacement);
+
+        // Gravity
+        velocity.current.y -= GRAVITY * delta;
+        nextPos.y += velocity.current.y * delta;
+
+        // Ground Check
+        const terrainHeight = getTerrainHeight(nextPos.x, nextPos.z);
+        const groundLevel = terrainHeight + 1.2; // +1.2 so feet are on ground
+
+        if (nextPos.y <= groundLevel) {
+            nextPos.y = groundLevel;
+            velocity.current.y = 0;
+            
+            // Jump
+            if (keys.current.shift) {
+                velocity.current.y = JUMP_FORCE;
             }
         }
-    }
-
-    if (collision) {
-        speed.current = -speed.current * 0.5;
-    } else {
+        
         player.position.copy(nextPos);
+
+        // Reset Visual Tilt from flying
+         if(player.children[0]) {
+            const inner = player.children[0] as THREE.Group;
+            inner.rotation.z = THREE.MathUtils.lerp(inner.rotation.z, 0, delta * 5);
+            inner.rotation.x = THREE.MathUtils.lerp(inner.rotation.x, 0, delta * 5);
+         }
     }
 
-    // Visual Banking
-    if(player.children[0]) {
-        const targetTilt = keys.current.a ? 0.6 : (keys.current.d ? -0.6 : 0);
-        const targetPitch = keys.current.w ? 0.3 : (keys.current.s ? -0.1 : 0);
-        player.children[0].rotation.z = THREE.MathUtils.lerp(player.children[0].rotation.z, targetTilt, delta * 4);
-        player.children[0].rotation.x = THREE.MathUtils.lerp(player.children[0].rotation.x, targetPitch, delta * 4);
-    }
-
-    // Camera
-    const camOffset = new THREE.Vector3(0, 6, 14);
+    // --- Camera Follow ---
+    const camDist = mode === PlayerMode.FLY ? 14 : 8;
+    const camHeight = mode === PlayerMode.FLY ? 6 : 4;
+    
+    const camOffset = new THREE.Vector3(0, camHeight, camDist);
     camOffset.applyAxisAngle(new THREE.Vector3(0, 1, 0), player.rotation.y);
     const idealCamPos = player.position.clone().add(camOffset);
 
@@ -1260,12 +1364,13 @@ const FlightController = () => {
 
   useEffect(() => {
      if(playerRef.current) {
+        // Initial spawn
         playerRef.current.position.set(0, 100, 100);
         playerRef.current.rotation.y = Math.PI; 
      }
   }, []);
 
-  return <WizardPlayer ref={playerRef} />;
+  return <WizardPlayer ref={playerRef} mode={mode} />;
 };
 
 
@@ -1331,7 +1436,7 @@ const GameScene: React.FC<GameSceneProps> = ({ gameState, weather }) => {
       <Cloud position={[600, 200, 500]} opacity={0.2} speed={0.1} segments={20} color="#8899aa" />
 
       {/* Game Logic */}
-      {gameState === GameState.PLAYING && <FlightController />}
+      {gameState === GameState.PLAYING && <PlayerController />}
       {gameState === GameState.START && <CinematicCamera />}
     </Canvas>
   );

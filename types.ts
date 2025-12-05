@@ -10,6 +10,11 @@ export enum WeatherState {
   SNOW = 'SNOW',
 }
 
+export enum PlayerMode {
+  FLY = 'FLY',
+  WALK = 'WALK',
+}
+
 export interface PlayerControls {
   forward: boolean;
   backward: boolean; 
