@@ -6,22 +6,12 @@ export enum GameState {
 
 export interface PlayerControls {
   forward: boolean;
-  backward: boolean; // Added for braking/reverse
+  backward: boolean; 
   left: boolean;
   right: boolean;
   up: boolean;
-  down: boolean; // Added for descending
+  down: boolean; 
   boost: boolean;
-}
-
-export interface RiddleData {
-  question: string;
-  hint: string;
-}
-
-export interface RiddleResponse {
-  isCorrect: boolean;
-  feedback: string;
 }
 
 export interface Coordinate {
