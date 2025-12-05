@@ -692,10 +692,19 @@ const NPCWizard = ({ color, ...props }: any) => (
 )
 
 // --- Roaming NPCs ---
-const WalkerNPC: React.FC<{ center: [number, number, number], radius: number, color: string }> = ({ center, radius, color }) => {
+const WalkerNPC: React.FC<{ 
+    center: [number, number, number], 
+    radius: number, 
+    color: string, 
+    playerRef: React.RefObject<THREE.Group>,
+    onInteractionChange: (hasInteraction: boolean, text?: string) => void,
+    dialoguePool: string[]
+}> = ({ center, radius, color, playerRef, onInteractionChange, dialoguePool }) => {
     const ref = useRef<THREE.Group>(null);
     const [target, setTarget] = useState(new THREE.Vector3());
     const speed = 2 + Math.random() * 2; // Walking speed
+    // Use a ref to track interaction state to avoid constant state updates in useFrame loop
+    const isInteractable = useRef(false);
 
     const pickTarget = () => {
         const r = Math.random() * radius;
@@ -718,27 +727,34 @@ const WalkerNPC: React.FC<{ center: [number, number, number], radius: number, co
     useFrame((state, delta) => {
         if (!ref.current) return;
         
+        // --- Movement Logic ---
         const pos = ref.current.position;
-        // Direction to target
         const dir = new THREE.Vector3().subVectors(target, pos);
-        dir.y = 0; // Move on flat plane logic first
+        dir.y = 0; 
         const dist = dir.length();
 
         if (dist < 2) {
-            // Reached target, pick new one
             setTarget(pickTarget());
         } else {
             dir.normalize();
-            // Move
             pos.add(dir.multiplyScalar(speed * delta));
-            // Snap to ground
             pos.y = getTerrainHeight(pos.x, pos.z) + 0.1;
-            
-            // Rotate to face target
-            // Calculate angle
-            const angle = Math.atan2(target.x - pos.x, target.z - pos.z);
-            // Smooth rotation could go here, but immediate lookAt is okay for simple NPC
             ref.current.lookAt(target.x, pos.y, target.z);
+        }
+
+        // --- Interaction Logic ---
+        if (playerRef.current) {
+            const distToPlayer = pos.distanceTo(playerRef.current.position);
+            const closeEnough = distToPlayer < 6.0;
+
+            if (closeEnough && !isInteractable.current) {
+                isInteractable.current = true;
+                const randomText = dialoguePool[Math.floor(Math.random() * dialoguePool.length)];
+                onInteractionChange(true, randomText);
+            } else if (!closeEnough && isInteractable.current) {
+                isInteractable.current = false;
+                onInteractionChange(false);
+            }
         }
     });
 
@@ -763,7 +779,7 @@ const WalkerNPC: React.FC<{ center: [number, number, number], radius: number, co
     )
 }
 
-const Population = () => {
+const Population = ({ playerRef, onNPCProx }: { playerRef: React.RefObject<THREE.Group>, onNPCProx: (hasInteraction: boolean, text?: string) => void }) => {
     const hogsmeadeNPCs = useMemo(() => {
         const npcs = [];
         for(let i=0; i<15; i++) npcs.push(i);
@@ -779,16 +795,52 @@ const Population = () => {
     const colors = ["#740001", "#1a472a", "#0e1a40", "#ecb939", "#333", "#555", "#4a3c31"];
     const randomColor = () => colors[Math.floor(Math.random() * colors.length)];
 
+    const hogsmeadeDialogue = [
+        "Fancy a Butterbeer at the Three Broomsticks?",
+        "I heard Zonko's has a sale on Dungbombs.",
+        "It's freezing today, isn't it?",
+        "Have you seen the Shrieking Shack? Spooky.",
+        "I need to buy some new quills.",
+        "Look at that broom go!",
+        "Are you a student or a visitor?"
+    ];
+
+    const hogwartsDialogue = [
+        "I'm late for Potions class!",
+        "10 points to Gryffindor!",
+        "Watch out for Peeves.",
+        "I hope we have a feast tonight.",
+        "Have you seen my toad?",
+        "The Giant Squid is active today.",
+        "Professor Snape is in a mood..."
+    ];
+
     return (
         <group>
             {/* Hogsmeade Walkers */}
             {hogsmeadeNPCs.map(i => (
-                <WalkerNPC key={`hogs-${i}`} center={HOGSMEADE_POS} radius={250} color={randomColor()} />
+                <WalkerNPC 
+                    key={`hogs-${i}`} 
+                    center={HOGSMEADE_POS} 
+                    radius={250} 
+                    color={randomColor()} 
+                    playerRef={playerRef}
+                    onInteractionChange={onNPCProx}
+                    dialoguePool={hogsmeadeDialogue}
+                />
             ))}
             
             {/* Hogwarts Walkers */}
             {hogwartsNPCs.map(i => (
-                <WalkerNPC key={`hog-${i}`} center={[CASTLE_POS[0], CASTLE_POS[1], CASTLE_POS[2] + 50]} radius={80} color={randomColor()} />
+                <WalkerNPC 
+                    key={`hog-${i}`} 
+                    center={[CASTLE_POS[0], CASTLE_POS[1], CASTLE_POS[2] + 50]} 
+                    radius={80} 
+                    color={randomColor()} 
+                    playerRef={playerRef}
+                    onInteractionChange={onNPCProx}
+                    dialoguePool={hogwartsDialogue}
+                />
             ))}
         </group>
     )
@@ -1154,7 +1206,8 @@ const Viaduct = ({ curve }: { curve: THREE.CatmullRomCurve3 }) => {
 
 const HogwartsExpress = ({ curve }: { curve: THREE.CatmullRomCurve3 }) => {
     const trainRef = useRef<THREE.Group>(null);
-    const [trainState, setTrainState] = useState<TrainState>({
+    // FIX: Use useRef for loop state instead of useState to prevent infinite re-renders
+    const stateRef = useRef<TrainState>({
         progress: 0,
         speed: 0.0003, // Base speed
         isStopped: false,
@@ -1164,33 +1217,32 @@ const HogwartsExpress = ({ curve }: { curve: THREE.CatmullRomCurve3 }) => {
     useFrame((state, delta) => {
         if (!trainRef.current) return;
 
-        let { progress, speed, isStopped, stopTimer } = trainState;
-
-        // Stops Logic: Stop 1 Station (approx 0.01), Stop 2 Castle (approx 0.54)
+        // Mutate ref directly
+        const s = stateRef.current;
         const stopPoints = [0.01, 0.54]; 
         const stopDuration = 5.0; // Seconds
 
-        if (isStopped) {
-            stopTimer -= delta;
-            if (stopTimer <= 0) {
-                isStopped = false;
-                progress += 0.005; // Move slightly to clear stop zone
+        if (s.isStopped) {
+            s.stopTimer -= delta;
+            if (s.stopTimer <= 0) {
+                s.isStopped = false;
+                s.progress += 0.005; // Move slightly to clear stop zone
             }
         } else {
-            progress = (progress + speed) % 1; 
+            s.progress = (s.progress + s.speed) % 1; 
 
             for (const sp of stopPoints) {
-                if (Math.abs(progress - sp) < 0.002) {
-                    isStopped = true;
-                    stopTimer = stopDuration;
+                if (Math.abs(s.progress - sp) < 0.002) {
+                    s.isStopped = true;
+                    s.stopTimer = stopDuration;
                     break;
                 }
             }
         }
 
         // --- Robust Orientation Logic (Fixes Vertical/Flipped Train) ---
-        const position = curve.getPointAt(progress);
-        const tangent = curve.getTangentAt(progress).normalize();
+        const position = curve.getPointAt(s.progress);
+        const tangent = curve.getTangentAt(s.progress).normalize();
         
         // Define Up vector as World Up, then orthogonalize
         const axisY = new THREE.Vector3(0, 1, 0); 
@@ -1206,8 +1258,6 @@ const HogwartsExpress = ({ curve }: { curve: THREE.CatmullRomCurve3 }) => {
         
         trainRef.current.matrix.copy(matrix);
         trainRef.current.matrixAutoUpdate = false; // Important when manually setting matrix
-
-        setTrainState({ progress, speed, isStopped, stopTimer });
     });
 
     return (
@@ -1367,10 +1417,12 @@ interface PlayerControllerProps {
     gameState: GameState;
     mazeData: MazeGrid;
     onWinMaze: () => void;
+    setNearMaze: (b: boolean) => void;
+    playerRef: React.RefObject<THREE.Group>; // External ref
 }
 
-const PlayerController: React.FC<PlayerControllerProps & { setNearMaze: (b: boolean) => void }> = ({ gameState, mazeData, onWinMaze, setNearMaze }) => {
-    const playerRef = useRef<THREE.Group>(null);
+const PlayerController: React.FC<PlayerControllerProps> = ({ gameState, mazeData, onWinMaze, setNearMaze, playerRef }) => {
+    // const playerRef = useRef<THREE.Group>(null); // Replaced by prop
     const velocity = useRef(new THREE.Vector3());
     const [mode, setMode] = useState<PlayerMode>(PlayerMode.FLY);
     const modeRef = useRef(mode);
@@ -1393,7 +1445,7 @@ const PlayerController: React.FC<PlayerControllerProps & { setNearMaze: (b: bool
             setMode(PlayerMode.FLY);
             modeRef.current = PlayerMode.FLY;
         }
-    }, [gameState, mazeData]);
+    }, [gameState, mazeData, playerRef]);
 
     useEffect(() => { modeRef.current = mode; }, [mode]);
   
@@ -1576,11 +1628,12 @@ interface GameSceneProps {
     weather: WeatherState;
     setNearMaze: (near: boolean) => void;
     setWinMaze: () => void;
+    onNPCInteract: (hasInteraction: boolean, text?: string) => void;
 }
 
-const GameScene: React.FC<GameSceneProps> = ({ gameState, weather, setNearMaze, setWinMaze }) => {
+const GameScene: React.FC<GameSceneProps> = ({ gameState, weather, setNearMaze, setWinMaze, onNPCInteract }) => {
   const mazeData = useMemo(() => generateMaze(MAZE_SIZE, MAZE_SIZE), []);
-  const playerCheckRef = useRef<THREE.Group>(null); // To track player pos for proximity outside of controller loop
+  const playerRef = useRef<THREE.Group>(null); // Lifted state
 
   // Wrapper for onWinMaze to handle scene logic if needed
   const handleWin = () => {
@@ -1633,15 +1686,15 @@ const GameScene: React.FC<GameSceneProps> = ({ gameState, weather, setNearMaze, 
       <WhompingWillow />
       <Azkaban />
       <QuidditchPitch />
-      <Population />
+      <Population playerRef={playerRef} onNPCProx={onNPCInteract} />
       <MazeStructure mazeData={mazeData} />
 
       {/* Weather */}
       <WeatherSystem weather={weather} />
 
-      {/* Clouds */}
-      <Cloud position={[-100, 150, -100]} opacity={0.2} speed={0.1} segments={20} color="#8899aa" />
-      <Cloud position={[600, 200, 500]} opacity={0.2} speed={0.1} segments={20} color="#8899aa" />
+      {/* Clouds - Simplified props for compatibility */}
+      <Cloud position={[-100, 150, -100]} opacity={0.2} speed={0.1} color="#8899aa" />
+      <Cloud position={[600, 200, 500]} opacity={0.2} speed={0.1} color="#8899aa" />
 
       {/* Game Logic */}
       {(gameState === GameState.PLAYING || gameState === GameState.MAZE) && (
@@ -1650,6 +1703,7 @@ const GameScene: React.FC<GameSceneProps> = ({ gameState, weather, setNearMaze, 
             mazeData={mazeData} 
             onWinMaze={handleWin}
             setNearMaze={setNearMaze}
+            playerRef={playerRef}
         />
       )}
       {gameState === GameState.START && <CinematicCamera />}

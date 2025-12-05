@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import GameScene from './components/GameScene';
 import { GameState, WeatherState } from './types';
@@ -75,6 +74,11 @@ export default function App() {
   const [muted, setMuted] = useState(false);
   const [nearMaze, setNearMaze] = useState(false);
   const [showWinBanner, setShowWinBanner] = useState(false);
+  
+  // NPC Interaction State
+  const [interactionPrompt, setInteractionPrompt] = useState<string | null>(null);
+  const [activeDialogue, setActiveDialogue] = useState<string | null>(null);
+  const nextDialogueRef = useRef<string | null>(null); // Stash next dialogue to show on keypress
 
   const startGame = () => {
       setGameState(GameState.PLAYING);
@@ -93,27 +97,51 @@ export default function App() {
       audio.toggleMute(!muted);
   }
 
-  // Handle Input for Maze
+  // Handle Input
   useEffect(() => {
       const handleKeyDown = (e: KeyboardEvent) => {
+          // Maze Entry
           if (gameState === GameState.PLAYING && nearMaze && e.key === 'Enter') {
               setGameState(GameState.MAZE);
               setShowWinBanner(false);
           }
+          // Maze Exit
           if (gameState === GameState.MAZE && e.key === 'Escape') {
               if (window.confirm("Abandon the Triwizard Maze?")) {
                 setGameState(GameState.PLAYING);
               }
           }
+          // NPC Talk
+          if (e.key.toLowerCase() === 'e') {
+              if (activeDialogue) {
+                  // Dismiss
+                  setActiveDialogue(null);
+              } else if (interactionPrompt && nextDialogueRef.current) {
+                  // Show Dialogue
+                  setActiveDialogue(nextDialogueRef.current);
+              }
+          }
       };
       window.addEventListener('keydown', handleKeyDown);
       return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [gameState, nearMaze]);
+  }, [gameState, nearMaze, interactionPrompt, activeDialogue]);
 
   const handleWinMaze = () => {
       setShowWinBanner(true);
       setGameState(GameState.PLAYING);
       setTimeout(() => setShowWinBanner(false), 5000);
+  };
+
+  const handleNPCInteract = (hasInteraction: boolean, text?: string) => {
+      if (hasInteraction && text) {
+          setInteractionPrompt("Press E to Talk");
+          nextDialogueRef.current = text;
+      } else {
+          setInteractionPrompt(null);
+          nextDialogueRef.current = null;
+          // Optionally auto-close dialogue if walked away
+          // setActiveDialogue(null); 
+      }
   };
 
   return (
@@ -127,6 +155,7 @@ export default function App() {
             weather={weather} 
             setNearMaze={setNearMaze}
             setWinMaze={handleWinMaze}
+            onNPCInteract={handleNPCInteract}
           />
         </div>
 
@@ -157,8 +186,28 @@ export default function App() {
             </div>
           </div>
 
+          {/* NPC Interaction Prompt */}
+          {interactionPrompt && !activeDialogue && (
+              <div className="absolute top-1/2 left-1/2 -translate-x-1/2 mt-10 pointer-events-auto animate-bounce">
+                  <div className="bg-black/80 text-white px-4 py-2 rounded-full border border-white/30 font-mono text-sm">
+                      {interactionPrompt}
+                  </div>
+              </div>
+          )}
+
+          {/* Dialogue Box */}
+          {activeDialogue && (
+              <div className="absolute bottom-32 left-1/2 -translate-x-1/2 w-full max-w-2xl pointer-events-auto">
+                  <div className="bg-slate-900/95 border-2 border-yellow-600/50 p-6 rounded-xl shadow-2xl mx-4">
+                      <div className="text-yellow-500 font-magic text-sm mb-1">Student</div>
+                      <p className="text-white font-serif text-xl italic leading-relaxed">"{activeDialogue}"</p>
+                      <div className="mt-4 text-xs text-gray-500 font-mono text-right">[Press E to close]</div>
+                  </div>
+              </div>
+          )}
+
           {/* Maze Interaction Banner */}
-          {gameState === GameState.PLAYING && nearMaze && (
+          {gameState === GameState.PLAYING && nearMaze && !activeDialogue && (
               <div className="absolute top-1/4 left-1/2 -translate-x-1/2 bg-green-900/90 border-2 border-green-500 p-6 rounded-lg text-center pointer-events-auto animate-pulse">
                   <h3 className="text-2xl font-magic text-green-100 mb-2">Triwizard Maze Entrance</h3>
                   <p className="text-green-300 font-mono text-sm">A test of navigation and courage.</p>
@@ -195,6 +244,7 @@ export default function App() {
                   <p><span className="text-yellow-500 font-bold">SHIFT</span> - Jump / Ascend</p>
                   <p><span className="text-yellow-500 font-bold">SPACE</span> - Run / Boost</p>
                   <p><span className="text-yellow-500 font-bold">Q</span> - Toggle Walk/Fly</p>
+                  <p><span className="text-yellow-500 font-bold">E</span> - Talk to NPCs</p>
                 </div>
                 <button 
                   onClick={startGame}
@@ -239,7 +289,7 @@ export default function App() {
                         <div>Space: Run</div>
                         
                         <div>Space: Boost</div>
-                        <div></div>
+                        <div>E: Talk</div>
                     </div>
                     </>
                 )}
