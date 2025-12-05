@@ -188,13 +188,13 @@ const Hogsmeade = () => {
                         <meshStandardMaterial color="#6e5e4e" />
                     </mesh>
                     {/* Roof */}
-                    <mesh position={[0, 25, 0]} rotation={[0, 0, 0]}>
-                        <coneGeometry args={[20, 15, 4]} rotation={[0, Math.PI/4, 0]} /> {/* Pyramid roof */}
+                    <mesh position={[0, 25, 0]} rotation={[0, Math.PI/4, 0]}>
+                        <coneGeometry args={[20, 15, 4]} /> {/* Pyramid roof */}
                         <meshStandardMaterial color="#222" />
                     </mesh>
                      {/* Snow on roof */}
-                    <mesh position={[0, 28, 0]} rotation={[0, 0, 0]}>
-                         <coneGeometry args={[18, 10, 4]} rotation={[0, Math.PI/4, 0]} />
+                    <mesh position={[0, 28, 0]} rotation={[0, Math.PI/4, 0]}>
+                         <coneGeometry args={[18, 10, 4]} />
                          <meshStandardMaterial color="#eee" />
                     </mesh>
                     {/* Chimney */}
@@ -222,8 +222,8 @@ const KingsCross = () => {
                 <meshStandardMaterial color="#5a5a5a" />
             </mesh>
             {/* Roof */}
-            <mesh position={[0, 30, 0]}>
-                <cylinderGeometry args={[40, 40, 300, 3, 1, false, 0, Math.PI]} rotation={[0, 0, Math.PI/2]} />
+            <mesh position={[0, 30, 0]} rotation={[0, 0, Math.PI/2]}>
+                <cylinderGeometry args={[40, 40, 300, 3, 1, false, 0, Math.PI]} />
                 <meshStandardMaterial color="#222" side={THREE.DoubleSide} />
             </mesh>
             {/* Pillars */}
@@ -805,10 +805,10 @@ const HogwartsExpress = ({ curve }: { curve: THREE.CatmullRomCurve3 }) => {
 
             {/* Wheels */}
             <group position={[0, -2, 0]}>
-                <mesh position={[3.2, 0, 5]}> <cylinderGeometry args={[2,2,1, 16]} rotation={[0,0,Math.PI/2]} /> <meshStandardMaterial color="#333" /> </mesh>
-                <mesh position={[-3.2, 0, 5]}> <cylinderGeometry args={[2,2,1, 16]} rotation={[0,0,Math.PI/2]} /> <meshStandardMaterial color="#333" /> </mesh>
-                <mesh position={[3.2, 0, 15]}> <cylinderGeometry args={[2,2,1, 16]} rotation={[0,0,Math.PI/2]} /> <meshStandardMaterial color="#333" /> </mesh>
-                <mesh position={[-3.2, 0, 15]}> <cylinderGeometry args={[2,2,1, 16]} rotation={[0,0,Math.PI/2]} /> <meshStandardMaterial color="#333" /> </mesh>
+                <mesh position={[3.2, 0, 5]} rotation={[0,0,Math.PI/2]}> <cylinderGeometry args={[2,2,1, 16]} /> <meshStandardMaterial color="#333" /> </mesh>
+                <mesh position={[-3.2, 0, 5]} rotation={[0,0,Math.PI/2]}> <cylinderGeometry args={[2,2,1, 16]} /> <meshStandardMaterial color="#333" /> </mesh>
+                <mesh position={[3.2, 0, 15]} rotation={[0,0,Math.PI/2]}> <cylinderGeometry args={[2,2,1, 16]} /> <meshStandardMaterial color="#333" /> </mesh>
+                <mesh position={[-3.2, 0, 15]} rotation={[0,0,Math.PI/2]}> <cylinderGeometry args={[2,2,1, 16]} /> <meshStandardMaterial color="#333" /> </mesh>
             </group>
 
             {/* Carriages */}
@@ -833,10 +833,10 @@ const Carriage = ({ zOffset }: { zOffset: number }) => {
             <mesh position={[0, -2, 9]}> <boxGeometry args={[2, 1, 4]} /> <meshStandardMaterial color="#111" /> </mesh>
             {/* Wheels */}
             <group position={[0, -2, 0]}>
-                <mesh position={[3.2, -2, -4]}> <cylinderGeometry args={[2,2,1, 16]} rotation={[0,0,Math.PI/2]} /> <meshStandardMaterial color="#333" /> </mesh>
-                <mesh position={[-3.2, -2, -4]}> <cylinderGeometry args={[2,2,1, 16]} rotation={[0,0,Math.PI/2]} /> <meshStandardMaterial color="#333" /> </mesh>
-                <mesh position={[3.2, -2, 4]}> <cylinderGeometry args={[2,2,1, 16]} rotation={[0,0,Math.PI/2]} /> <meshStandardMaterial color="#333" /> </mesh>
-                <mesh position={[-3.2, -2, 4]}> <cylinderGeometry args={[2,2,1, 16]} rotation={[0,0,Math.PI/2]} /> <meshStandardMaterial color="#333" /> </mesh>
+                <mesh position={[3.2, -2, -4]} rotation={[0,0,Math.PI/2]}> <cylinderGeometry args={[2,2,1, 16]} /> <meshStandardMaterial color="#333" /> </mesh>
+                <mesh position={[-3.2, -2, -4]} rotation={[0,0,Math.PI/2]}> <cylinderGeometry args={[2,2,1, 16]} /> <meshStandardMaterial color="#333" /> </mesh>
+                <mesh position={[3.2, -2, 4]} rotation={[0,0,Math.PI/2]}> <cylinderGeometry args={[2,2,1, 16]} /> <meshStandardMaterial color="#333" /> </mesh>
+                <mesh position={[-3.2, -2, 4]} rotation={[0,0,Math.PI/2]}> <cylinderGeometry args={[2,2,1, 16]} /> <meshStandardMaterial color="#333" /> </mesh>
             </group>
         </group>
     )
@@ -1063,7 +1063,7 @@ const GameScene: React.FC<GameSceneProps> = ({ gameState }) => {
       
       {/* Increased Light Intensity */}
       <ambientLight intensity={2.0} color="#8aa2b3" />
-      <hemisphereLight skyColor="#87CEEB" groundColor="#374151" intensity={1.5} />
+      <hemisphereLight color="#87CEEB" groundColor="#374151" intensity={1.5} />
 
       <directionalLight 
         position={[200, 300, 100]} 
@@ -1088,8 +1088,8 @@ const GameScene: React.FC<GameSceneProps> = ({ gameState }) => {
       <QuidditchPitch />
 
       {/* Clouds */}
-      <Cloud position={[-100, 150, -100]} opacity={0.2} speed={0.1} segments={20} color="#8899aa" width={100} depth={5} />
-      <Cloud position={[600, 200, 500]} opacity={0.2} speed={0.1} segments={20} color="#8899aa" width={200} depth={5} />
+      <Cloud position={[-100, 150, -100]} opacity={0.2} speed={0.1} segments={20} color="#8899aa" />
+      <Cloud position={[600, 200, 500]} opacity={0.2} speed={0.1} segments={20} color="#8899aa" />
 
       {/* Game Logic */}
       {gameState === GameState.PLAYING && <FlightController />}
