@@ -2,6 +2,7 @@
 export enum GameState {
   START = 'START',
   PLAYING = 'PLAYING',
+  MAZE = 'MAZE',
 }
 
 export enum WeatherState {

@@ -73,6 +73,8 @@ export default function App() {
   const [gameState, setGameState] = useState<GameState>(GameState.START);
   const [weather, setWeather] = useState<WeatherState>(WeatherState.CLEAR);
   const [muted, setMuted] = useState(false);
+  const [nearMaze, setNearMaze] = useState(false);
+  const [showWinBanner, setShowWinBanner] = useState(false);
 
   const startGame = () => {
       setGameState(GameState.PLAYING);
@@ -91,13 +93,41 @@ export default function App() {
       audio.toggleMute(!muted);
   }
 
+  // Handle Input for Maze
+  useEffect(() => {
+      const handleKeyDown = (e: KeyboardEvent) => {
+          if (gameState === GameState.PLAYING && nearMaze && e.key === 'Enter') {
+              setGameState(GameState.MAZE);
+              setShowWinBanner(false);
+          }
+          if (gameState === GameState.MAZE && e.key === 'Escape') {
+              if (window.confirm("Abandon the Triwizard Maze?")) {
+                setGameState(GameState.PLAYING);
+              }
+          }
+      };
+      window.addEventListener('keydown', handleKeyDown);
+      return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [gameState, nearMaze]);
+
+  const handleWinMaze = () => {
+      setShowWinBanner(true);
+      setGameState(GameState.PLAYING);
+      setTimeout(() => setShowWinBanner(false), 5000);
+  };
+
   return (
     <>
       <div className="relative w-full h-full select-none overflow-hidden bg-black">
         
         {/* 3D Scene */}
         <div className="absolute inset-0 z-0">
-          <GameScene gameState={gameState} weather={weather} />
+          <GameScene 
+            gameState={gameState} 
+            weather={weather} 
+            setNearMaze={setNearMaze}
+            setWinMaze={handleWinMaze}
+          />
         </div>
 
         {/* UI Overlay */}
@@ -127,6 +157,33 @@ export default function App() {
             </div>
           </div>
 
+          {/* Maze Interaction Banner */}
+          {gameState === GameState.PLAYING && nearMaze && (
+              <div className="absolute top-1/4 left-1/2 -translate-x-1/2 bg-green-900/90 border-2 border-green-500 p-6 rounded-lg text-center pointer-events-auto animate-pulse">
+                  <h3 className="text-2xl font-magic text-green-100 mb-2">Triwizard Maze Entrance</h3>
+                  <p className="text-green-300 font-mono text-sm">A test of navigation and courage.</p>
+                  <div className="mt-4 text-white font-bold bg-green-800 px-4 py-2 rounded inline-block">Press ENTER to Start</div>
+              </div>
+          )}
+
+          {/* Maze Mode UI */}
+          {gameState === GameState.MAZE && (
+              <div className="absolute top-4 left-1/2 -translate-x-1/2 text-center pointer-events-auto">
+                   <div className="bg-black/60 px-6 py-2 rounded-full border border-green-500">
+                      <span className="text-green-400 font-magic text-xl">Inside the Maze</span>
+                      <p className="text-xs text-gray-400 font-mono">Reach the Trophy | ESC to Quit</p>
+                   </div>
+              </div>
+          )}
+
+           {/* Win Banner */}
+           {showWinBanner && (
+              <div className="absolute top-1/3 left-1/2 -translate-x-1/2 bg-yellow-900/95 border-4 border-yellow-500 p-10 rounded-xl text-center z-50 shadow-[0_0_50px_rgba(234,179,8,0.5)]">
+                  <h2 className="text-5xl font-magic text-yellow-100 mb-4">Victory!</h2>
+                  <p className="text-yellow-300 font-serif text-lg">You have conquered the Maze!</p>
+              </div>
+          )}
+
           {/* Start Screen Overlay */}
           {gameState === GameState.START && (
             <div className="absolute inset-0 flex items-center justify-center pointer-events-auto bg-black/60 backdrop-blur-sm z-50">
@@ -150,30 +207,42 @@ export default function App() {
           )}
 
           {/* In-Game Controls Hint */}
-          {gameState === GameState.PLAYING && (
+          {gameState !== GameState.START && (
             <div className="self-end bg-black/50 p-3 rounded-lg border border-white/10 backdrop-blur-sm">
               <div className="text-xs text-gray-300 font-mono space-y-1">
                 <div className="border-b border-gray-600 pb-1 mb-1 font-bold text-center">CONTROLS</div>
-                <div className="flex justify-between gap-4">
-                  <span>Toggle Mode:</span>
-                  <span className="font-bold text-yellow-400">Q</span>
-                </div>
-                <div className="grid grid-cols-2 gap-x-4 mt-2">
-                    <div className="text-blue-300 font-bold">FLY MODE</div>
-                    <div className="text-green-300 font-bold">WALK MODE</div>
-                    
-                    <div>WASD: Flight</div>
-                    <div>WASD: Walk</div>
-                    
-                    <div>Shift: Up</div>
-                    <div>Shift: Jump</div>
-                    
-                    <div>Ctrl: Down</div>
-                    <div>Space: Run</div>
-                    
-                    <div>Space: Boost</div>
-                    <div></div>
-                </div>
+                
+                {gameState === GameState.MAZE ? (
+                    <div className="grid grid-cols-2 gap-x-4 mt-2 text-green-300">
+                        <div className="col-span-2 text-center font-bold pb-2">MAZE MODE</div>
+                        <div>WASD: Walk</div>
+                        <div>Shift: Run</div>
+                        <div>Esc: Quit</div>
+                    </div>
+                ) : (
+                    <>
+                    <div className="flex justify-between gap-4">
+                        <span>Toggle Mode:</span>
+                        <span className="font-bold text-yellow-400">Q</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-x-4 mt-2">
+                        <div className="text-blue-300 font-bold">FLY MODE</div>
+                        <div className="text-green-300 font-bold">WALK MODE</div>
+                        
+                        <div>WASD: Flight</div>
+                        <div>WASD: Walk</div>
+                        
+                        <div>Shift: Up</div>
+                        <div>Shift: Jump</div>
+                        
+                        <div>Ctrl: Down</div>
+                        <div>Space: Run</div>
+                        
+                        <div>Space: Boost</div>
+                        <div></div>
+                    </div>
+                    </>
+                )}
               </div>
             </div>
           )}

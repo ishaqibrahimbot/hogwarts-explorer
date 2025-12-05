@@ -1,9 +1,9 @@
-
 import React, { useRef, useEffect, useState, useMemo } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { Stars, Sky, Cloud, Sparkles, Environment, Loader } from '@react-three/drei';
 import * as THREE from 'three';
-import { GameState, TrainState, WeatherState, PlayerMode } from '../types';
+import { GameState, TrainState, WeatherState, PlayerMode, MazeGrid } from '../types';
+import { generateMaze } from '../services/mazeGenerator';
 
 // --- Constants & Config ---
 const WORLD_SIZE = 10000;
@@ -14,7 +14,10 @@ const STATION_POS: [number, number, number] = [1500, 10, 1200];
 const AZKABAN_POS: [number, number, number] = [2800, 0, 2800];
 const WILLOW_POS: [number, number, number] = [-250, 0, -150]; // West of Castle
 const QUIDDITCH_POS: [number, number, number] = [800, 30, -800]; // North-East
+const MAZE_POS: [number, number, number] = [-800, 0, 800]; // South-West, moved away from Forest
 const TREE_COUNT = 800;
+const MAZE_CELL_SIZE = 15;
+const MAZE_SIZE = 31; // Increased from 21 to 31 for more complexity
 
 // --- Utility: Deterministic Random ---
 const seededRandom = (seed: number) => {
@@ -97,6 +100,22 @@ const getTerrainHeight = (x: number, z: number) => {
        // Create a localized hill approx height 60
        const hillHeight = 60 - (distToWillow * 0.5); // Slope down
        y = Math.max(y, hillHeight);
+  }
+
+  // 10. Flatten Maze Area (Strict Plateau)
+  const distToMaze = Math.sqrt((x - MAZE_POS[0])**2 + (z - MAZE_POS[2])**2);
+  const mazeFlatRadius = (MAZE_SIZE * MAZE_CELL_SIZE) / 2 + 50; // Strictly flat inside this radius
+  const mazeBlendRadius = 150; // Blend area outside the flat zone
+
+  if (distToMaze < mazeFlatRadius + mazeBlendRadius) {
+      const mazeHeight = MAZE_POS[1];
+      if (distToMaze <= mazeFlatRadius) {
+          y = mazeHeight; // Force absolute flat
+      } else {
+          // Linear blend from flat radius out to blend radius
+          const factor = (distToMaze - mazeFlatRadius) / mazeBlendRadius;
+          y = THREE.MathUtils.lerp(mazeHeight, y, factor);
+      }
   }
 
   return y;
@@ -294,8 +313,10 @@ const GroundDetails = () => {
                  const distCastle = Math.sqrt((x-CASTLE_POS[0])**2 + (z-CASTLE_POS[2])**2);
                  const distHogs = Math.sqrt((x-HOGSMEADE_POS[0])**2 + (z-HOGSMEADE_POS[2])**2);
                  const distQuid = Math.sqrt((x-QUIDDITCH_POS[0])**2 + (z-QUIDDITCH_POS[2])**2);
+                 const distMaze = Math.sqrt((x-MAZE_POS[0])**2 + (z-MAZE_POS[2])**2);
 
-                 if (!isWater && !isSnow && distCastle > 150 && distHogs > 250 && distQuid > 200) {
+                 // Increased buffer for maze to prevent grass clipping into flat maze floor
+                 if (!isWater && !isSnow && distCastle > 150 && distHogs > 250 && distQuid > 200 && distMaze > 350) {
                      dummy.position.set(x, y, z);
                      dummy.rotation.set(0, Math.random() * Math.PI, 0);
                      const s = 0.5 + Math.random() * 1.5;
@@ -351,8 +372,9 @@ const GroundDetails = () => {
                 const isWater = y < 0;
                 const isSnow = y > 120;
                 const distCastle = Math.sqrt((x-CASTLE_POS[0])**2 + (z-CASTLE_POS[2])**2);
+                const distMaze = Math.sqrt((x-MAZE_POS[0])**2 + (z-MAZE_POS[2])**2);
 
-                if (!isWater && !isSnow && distCastle > 100) {
+                if (!isWater && !isSnow && distCastle > 100 && distMaze > 350) {
                    dummy.position.set(x, y + 1, z);
                    dummy.rotation.set(0, Math.random() * Math.PI, 0);
                    const s = 1.5 + Math.random() * 2;
@@ -667,9 +689,112 @@ const NPCWizard = ({ color, ...props }: any) => (
           <meshStandardMaterial color="#ffdbac" />
       </mesh>
     </group>
-  )
+)
+
+// --- Roaming NPCs ---
+const WalkerNPC: React.FC<{ center: [number, number, number], radius: number, color: string }> = ({ center, radius, color }) => {
+    const ref = useRef<THREE.Group>(null);
+    const [target, setTarget] = useState(new THREE.Vector3());
+    const speed = 2 + Math.random() * 2; // Walking speed
+
+    const pickTarget = () => {
+        const r = Math.random() * radius;
+        const theta = Math.random() * Math.PI * 2;
+        return new THREE.Vector3(
+            center[0] + Math.cos(theta) * r,
+            0,
+            center[2] + Math.sin(theta) * r
+        );
+    };
+
+    useEffect(() => {
+        // Initialize position
+        const start = pickTarget();
+        start.y = getTerrainHeight(start.x, start.z);
+        if(ref.current) ref.current.position.copy(start);
+        setTarget(pickTarget());
+    }, []);
+
+    useFrame((state, delta) => {
+        if (!ref.current) return;
+        
+        const pos = ref.current.position;
+        // Direction to target
+        const dir = new THREE.Vector3().subVectors(target, pos);
+        dir.y = 0; // Move on flat plane logic first
+        const dist = dir.length();
+
+        if (dist < 2) {
+            // Reached target, pick new one
+            setTarget(pickTarget());
+        } else {
+            dir.normalize();
+            // Move
+            pos.add(dir.multiplyScalar(speed * delta));
+            // Snap to ground
+            pos.y = getTerrainHeight(pos.x, pos.z) + 0.1;
+            
+            // Rotate to face target
+            // Calculate angle
+            const angle = Math.atan2(target.x - pos.x, target.z - pos.z);
+            // Smooth rotation could go here, but immediate lookAt is okay for simple NPC
+            ref.current.lookAt(target.x, pos.y, target.z);
+        }
+    });
+
+    return (
+        <group ref={ref}>
+             {/* Simple Walker Visualization (No Broom) */}
+            <mesh position={[0, 1, 0]} castShadow>
+                <cylinderGeometry args={[0.3, 0.4, 2, 8]} />
+                <meshStandardMaterial color={color} />
+            </mesh>
+            {/* Head */}
+            <mesh position={[0, 2.2, 0]} castShadow>
+                <sphereGeometry args={[0.25, 16, 16]} />
+                <meshStandardMaterial color="#ffdbac" />
+            </mesh>
+            {/* Hat */}
+            <mesh position={[0, 2.5, 0]} castShadow>
+                 <coneGeometry args={[0.3, 0.6, 16]} />
+                 <meshStandardMaterial color="#111" />
+            </mesh>
+        </group>
+    )
+}
+
+const Population = () => {
+    const hogsmeadeNPCs = useMemo(() => {
+        const npcs = [];
+        for(let i=0; i<15; i++) npcs.push(i);
+        return npcs;
+    }, []);
+
+    const hogwartsNPCs = useMemo(() => {
+        const npcs = [];
+        for(let i=0; i<10; i++) npcs.push(i);
+        return npcs;
+    }, []);
+
+    const colors = ["#740001", "#1a472a", "#0e1a40", "#ecb939", "#333", "#555", "#4a3c31"];
+    const randomColor = () => colors[Math.floor(Math.random() * colors.length)];
+
+    return (
+        <group>
+            {/* Hogsmeade Walkers */}
+            {hogsmeadeNPCs.map(i => (
+                <WalkerNPC key={`hogs-${i}`} center={HOGSMEADE_POS} radius={250} color={randomColor()} />
+            ))}
+            
+            {/* Hogwarts Walkers */}
+            {hogwartsNPCs.map(i => (
+                <WalkerNPC key={`hog-${i}`} center={[CASTLE_POS[0], CASTLE_POS[1], CASTLE_POS[2] + 50]} radius={80} color={randomColor()} />
+            ))}
+        </group>
+    )
+}
   
-  const QuidditchMatch = () => {
+const QuidditchMatch = () => {
      const ballRef = useRef<THREE.Mesh>(null);
      const playersRef = useRef<THREE.Group>(null);
      
@@ -799,6 +924,72 @@ const QuidditchPitch = () => {
       <QuidditchMatch />
     </group>
   )
+}
+
+// --- Maze Structure ---
+const MazeStructure = ({ mazeData }: { mazeData: MazeGrid }) => {
+    const meshRef = useRef<THREE.InstancedMesh>(null);
+    const dummy = useMemo(() => new THREE.Object3D(), []);
+    
+    useEffect(() => {
+        if (!meshRef.current) return;
+        let idx = 0;
+        
+        // Calculate offsets to center the maze around MAZE_POS
+        // Grid (0,0) will be top-left corner
+        const width = mazeData.width * MAZE_CELL_SIZE;
+        const height = mazeData.height * MAZE_CELL_SIZE;
+        const offsetX = -width / 2;
+        const offsetZ = -height / 2;
+
+        for (let y = 0; y < mazeData.height; y++) {
+            for (let x = 0; x < mazeData.width; x++) {
+                if (mazeData.grid[y][x] === 1) { // 1 is Wall
+                    // Position
+                    dummy.position.set(
+                        offsetX + x * MAZE_CELL_SIZE, 
+                        7.5, // Height/2 (15 tall)
+                        offsetZ + y * MAZE_CELL_SIZE
+                    );
+                    dummy.scale.set(1, 1, 1);
+                    dummy.updateMatrix();
+                    meshRef.current.setMatrixAt(idx++, dummy.matrix);
+                }
+            }
+        }
+        meshRef.current.instanceMatrix.needsUpdate = true;
+    }, [mazeData, dummy]);
+
+    return (
+        <group position={MAZE_POS}>
+             {/* Floor */}
+            <mesh rotation={[-Math.PI/2, 0, 0]} position={[0, 0.1, 0]} receiveShadow>
+                <planeGeometry args={[mazeData.width * MAZE_CELL_SIZE + 20, mazeData.height * MAZE_CELL_SIZE + 20]} />
+                <meshStandardMaterial color="#1a2f1a" />
+            </mesh>
+
+            {/* Walls */}
+            {/* Added frustumCulled={false} to fix disappearing maze bug */}
+            <instancedMesh ref={meshRef} args={[undefined, undefined, mazeData.width * mazeData.height]} castShadow receiveShadow frustumCulled={false}>
+                <boxGeometry args={[MAZE_CELL_SIZE, 15, MAZE_CELL_SIZE]} />
+                <meshStandardMaterial color="#0b290b" roughness={0.9} />
+            </instancedMesh>
+            
+            {/* End Goal Marker */}
+            <group position={[
+                (mazeData.end.x - mazeData.width/2) * MAZE_CELL_SIZE,
+                5,
+                (mazeData.end.y - mazeData.height/2) * MAZE_CELL_SIZE
+            ]}>
+                <mesh>
+                    <cylinderGeometry args={[0, 4, 8, 4]} /> {/* Trophy Cup Shape */}
+                    <meshStandardMaterial color="#ffd700" metalness={0.9} roughness={0.1} />
+                </mesh>
+                <pointLight intensity={3} color="#aaddff" distance={20} />
+                <Sparkles count={20} scale={5} size={6} speed={1} color="#ffd700" />
+            </group>
+        </group>
+    )
 }
 
 // --- Forbidden Forest ---
@@ -1089,34 +1280,13 @@ const WizardPlayer = React.forwardRef<THREE.Group, WizardProps>(({ mode }, ref) 
     useFrame((state, delta) => {
         if (!bodyRef.current || !broomRef.current) return;
         
-        // --- Smooth Animation Transitions ---
-        
-        // Lean: Flying leans forward (1.5 rad approx), Walking stays upright (0 rad)
-        // But the parent container handles some rotation for flying physics.
-        // Here we handle the local posture.
-        
         const isFlying = mode === PlayerMode.FLY;
         
-        // Posture
-        const targetBodyRotX = isFlying ? 1.4 : 0; 
-        // When flying, the physics rotates the whole container X.
-        // Actually, in our physics loop, we rotate the container 'playerRef' X based on pitch.
-        // So for the model itself:
-        // Flying: The broom is horizontal, wizard sits on it.
-        // Walking: The broom is vertical on back, wizard stands.
-        
-        // Let's rely on the physics controller to orient the *Group* for flying direction.
-        // Here we adjust the *local* parts.
-        
-        // Broom Position
+        // Broom Position/Visibility
+        // Hide broom entirely if walking
         // Flying: Underneath [0, 0, 0], Horizontal
-        // Walking: On Back [0, 1, -0.5], Vertical
-        const targetBroomPos = isFlying ? new THREE.Vector3(0, 0, 0) : new THREE.Vector3(0, 1.2, -0.5);
-        const targetBroomRotX = isFlying ? Math.PI / 2 : 0; // Cylinder is Y-up default?
-        // Our broom geom: Cylinder args=[..., height=3.5]. 
-        // In original code: rotation={[Math.PI / 2, 0, 0]} makes it Z-aligned (forward).
-        // Walking: We want it Y-aligned (Vertical).
-        const finalBroomRotX = isFlying ? Math.PI / 2 : 0; 
+        const targetBroomPos = new THREE.Vector3(0, 0, 0);
+        const finalBroomRotX = Math.PI / 2;
 
         broomRef.current.position.lerp(targetBroomPos, delta * 5);
         broomRef.current.rotation.x = THREE.MathUtils.lerp(broomRef.current.rotation.x, finalBroomRotX, delta * 5);
@@ -1135,8 +1305,8 @@ const WizardPlayer = React.forwardRef<THREE.Group, WizardProps>(({ mode }, ref) 
         <group ref={ref}>
             <group ref={groupRef} rotation={[0, Math.PI, 0]}>
                 
-                {/* Broom Stick */}
-                <group ref={broomRef}>
+                {/* Broom Stick - Toggle visibility based on mode */}
+                <group ref={broomRef} visible={mode === PlayerMode.FLY}>
                     <mesh castShadow>
                         <cylinderGeometry args={[0.08, 0.05, 3.5, 8]} />
                         <meshStandardMaterial color="#4a3c31" />
@@ -1193,194 +1363,230 @@ const WizardPlayer = React.forwardRef<THREE.Group, WizardProps>(({ mode }, ref) 
 });
 
 // --- Physics/Player Controller ---
-const PlayerController = () => {
-  const playerRef = useRef<THREE.Group>(null);
-  const velocity = useRef(new THREE.Vector3()); // X=Speed, Y=Vertical Velocity (Gravity), Z=Unused
-  const [mode, setMode] = useState<PlayerMode>(PlayerMode.FLY);
-  
-  const { camera } = useThree();
-  const treeData = useMemo(() => getTreeData(), []);
+interface PlayerControllerProps {
+    gameState: GameState;
+    mazeData: MazeGrid;
+    onWinMaze: () => void;
+}
 
-  const keys = useRef({
-    w: false, a: false, s: false, d: false, 
-    shift: false, control: false, space: false, q: false
-  });
-  const prevQ = useRef(false);
+const PlayerController: React.FC<PlayerControllerProps & { setNearMaze: (b: boolean) => void }> = ({ gameState, mazeData, onWinMaze, setNearMaze }) => {
+    const playerRef = useRef<THREE.Group>(null);
+    const velocity = useRef(new THREE.Vector3());
+    const [mode, setMode] = useState<PlayerMode>(PlayerMode.FLY);
+    const modeRef = useRef(mode);
 
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      const k = e.key.toLowerCase();
-      if (k === 'w') keys.current.w = true;
-      if (k === 'a') keys.current.a = true;
-      if (k === 's') keys.current.s = true;
-      if (k === 'd') keys.current.d = true;
-      if (k === 'q') keys.current.q = true;
-      if (e.shiftKey) keys.current.shift = true;
-      if (e.ctrlKey) keys.current.control = true;
-      if (e.code === 'Space') keys.current.space = true;
-    };
-    const onKeyUp = (e: KeyboardEvent) => {
-      const k = e.key.toLowerCase();
-      if (k === 'w') keys.current.w = false;
-      if (k === 'a') keys.current.a = false;
-      if (k === 's') keys.current.s = false;
-      if (k === 'd') keys.current.d = false;
-      if (k === 'q') keys.current.q = false;
-      keys.current.shift = e.shiftKey;
-      keys.current.control = e.ctrlKey;
-      if (e.code === 'Space') keys.current.space = false;
-    };
-    window.addEventListener('keydown', onKeyDown);
-    window.addEventListener('keyup', onKeyUp);
-    return () => {
-      window.removeEventListener('keydown', onKeyDown);
-      window.removeEventListener('keyup', onKeyUp);
-    };
-  }, []);
-
-  useFrame((state, delta) => {
-    if (!playerRef.current) return;
-    const player = playerRef.current;
-
-    // --- Toggle Mode ---
-    if (keys.current.q && !prevQ.current) {
-        setMode(prev => prev === PlayerMode.FLY ? PlayerMode.WALK : PlayerMode.FLY);
-        // Reset vertical velocity when switching to avoid huge jumps
-        velocity.current.y = 0; 
-    }
-    prevQ.current = keys.current.q;
-
-    // --- Physics Logic ---
-    const ROTATION_SPEED = 2.5;
-
-    if (mode === PlayerMode.FLY) {
-        // === FLYING PHYSICS ===
-        
-        const MAX_SPEED = keys.current.space ? 120.0 : 60.0;
-        const VERTICAL_SPEED = 30.0;
-
-        // Rotation
-        if (keys.current.a) player.rotation.y += ROTATION_SPEED * delta;
-        if (keys.current.d) player.rotation.y -= ROTATION_SPEED * delta;
-
-        // Speed (stored in velocity.x for flying)
-        let targetSpeed = 0;
-        if (keys.current.w) targetSpeed = MAX_SPEED;
-        if (keys.current.s) targetSpeed = -MAX_SPEED * 0.5;
-        
-        velocity.current.x = THREE.MathUtils.lerp(velocity.current.x, targetSpeed, delta * 2);
-
-        // Movement Vector
-        const forward = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), player.rotation.y);
-        const displacement = forward.clone().multiplyScalar(velocity.current.x * delta);
-        
-        let verticalMove = 0;
-        if (keys.current.shift) verticalMove = VERTICAL_SPEED * delta;
-        if (keys.current.control) verticalMove = -VERTICAL_SPEED * delta;
-
-        const nextPos = player.position.clone().add(displacement);
-        nextPos.y += verticalMove;
-
-        // Terrain Collision (Bounce)
-        const terrainHeight = getTerrainHeight(nextPos.x, nextPos.z);
-        if (nextPos.y < terrainHeight + 2) {
-            nextPos.y = terrainHeight + 2;
-            if (verticalMove < 0) velocity.current.x *= 0.8;
-        }
-        
-        player.position.copy(nextPos);
-
-        // Visual Banking
-        if(player.children[0]) {
-            const targetTilt = keys.current.a ? 0.6 : (keys.current.d ? -0.6 : 0);
-            const targetPitch = keys.current.w ? 0.3 : (keys.current.s ? -0.1 : 0);
-            // Access the inner group (WizardPlayer group)
-            const inner = player.children[0] as THREE.Group; 
-            inner.rotation.z = THREE.MathUtils.lerp(inner.rotation.z, targetTilt, delta * 4);
-            inner.rotation.x = THREE.MathUtils.lerp(inner.rotation.x, targetPitch, delta * 4);
-        }
-
-    } else {
-        // === WALKING PHYSICS ===
-        const WALK_SPEED = 15.0;
-        const RUN_SPEED = 30.0;
-        const GRAVITY = 80.0;
-        const JUMP_FORCE = 30.0;
-
-        // Rotation
-        if (keys.current.a) player.rotation.y += ROTATION_SPEED * delta;
-        if (keys.current.d) player.rotation.y -= ROTATION_SPEED * delta;
-
-        // Speed
-        const speed = keys.current.space ? RUN_SPEED : WALK_SPEED;
-        let moveForward = 0;
-        if (keys.current.w) moveForward = speed;
-        if (keys.current.s) moveForward = -speed;
-
-        const forward = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), player.rotation.y);
-        const displacement = forward.clone().multiplyScalar(moveForward * delta);
-        
-        const nextPos = player.position.clone().add(displacement);
-
-        // Gravity
-        velocity.current.y -= GRAVITY * delta;
-        nextPos.y += velocity.current.y * delta;
-
-        // Ground Check
-        const terrainHeight = getTerrainHeight(nextPos.x, nextPos.z);
-        const groundLevel = terrainHeight + 1.2; // +1.2 so feet are on ground
-
-        if (nextPos.y <= groundLevel) {
-            nextPos.y = groundLevel;
-            velocity.current.y = 0;
-            
-            // Jump
-            if (keys.current.shift) {
-                velocity.current.y = JUMP_FORCE;
+    // Sync mode state and ref
+    useEffect(() => {
+        if (gameState === GameState.MAZE) {
+            setMode(PlayerMode.WALK);
+            modeRef.current = PlayerMode.WALK;
+            if (playerRef.current) {
+                const mazeWidth = mazeData.width * MAZE_CELL_SIZE;
+                const mazeHeight = mazeData.height * MAZE_CELL_SIZE;
+                const startX = MAZE_POS[0] - mazeWidth/2 + mazeData.start.x * MAZE_CELL_SIZE;
+                const startZ = MAZE_POS[2] - mazeHeight/2 + mazeData.start.y * MAZE_CELL_SIZE;
+                playerRef.current.position.set(startX, MAZE_POS[1] + 2, startZ);
+                playerRef.current.rotation.y = 0;
+                velocity.current.set(0,0,0);
             }
+        } else {
+            setMode(PlayerMode.FLY);
+            modeRef.current = PlayerMode.FLY;
         }
-        
-        player.position.copy(nextPos);
+    }, [gameState, mazeData]);
 
-        // Reset Visual Tilt from flying
-         if(player.children[0]) {
-            const inner = player.children[0] as THREE.Group;
-            inner.rotation.z = THREE.MathUtils.lerp(inner.rotation.z, 0, delta * 5);
-            inner.rotation.x = THREE.MathUtils.lerp(inner.rotation.x, 0, delta * 5);
-         }
-    }
+    useEffect(() => { modeRef.current = mode; }, [mode]);
+  
+    const keys = useRef({ w: false, a: false, s: false, d: false, shift: false, control: false, space: false, q: false });
+    const prevQ = useRef(false);
 
-    // --- Camera Follow ---
-    const camDist = mode === PlayerMode.FLY ? 14 : 8;
-    const camHeight = mode === PlayerMode.FLY ? 6 : 4;
-    
-    const camOffset = new THREE.Vector3(0, camHeight, camDist);
-    camOffset.applyAxisAngle(new THREE.Vector3(0, 1, 0), player.rotation.y);
-    const idealCamPos = player.position.clone().add(camOffset);
+    useEffect(() => {
+        const onKeyDown = (e: KeyboardEvent) => {
+            const k = e.key.toLowerCase();
+            if (k === 'w') keys.current.w = true;
+            if (k === 'a') keys.current.a = true;
+            if (k === 's') keys.current.s = true;
+            if (k === 'd') keys.current.d = true;
+            if (k === 'q') keys.current.q = true;
+            if (e.shiftKey) keys.current.shift = true;
+            if (e.ctrlKey) keys.current.control = true;
+            if (e.code === 'Space') keys.current.space = true;
+        };
+        const onKeyUp = (e: KeyboardEvent) => {
+            const k = e.key.toLowerCase();
+            if (k === 'w') keys.current.w = false;
+            if (k === 'a') keys.current.a = false;
+            if (k === 's') keys.current.s = false;
+            if (k === 'd') keys.current.d = false;
+            if (k === 'q') keys.current.q = false;
+            keys.current.shift = e.shiftKey;
+            keys.current.control = e.ctrlKey;
+            if (e.code === 'Space') keys.current.space = false;
+        };
+        window.addEventListener('keydown', onKeyDown);
+        window.addEventListener('keyup', onKeyUp);
+        return () => {
+            window.removeEventListener('keydown', onKeyDown);
+            window.removeEventListener('keyup', onKeyUp);
+        };
+    }, []);
 
-    state.camera.position.lerp(idealCamPos, 0.1);
-    state.camera.lookAt(player.position.clone().add(new THREE.Vector3(0, 2, 0)));
-  });
+    useFrame((state, delta) => {
+        if (!playerRef.current) return;
+        const player = playerRef.current;
+        const currentMode = modeRef.current;
 
-  useEffect(() => {
-     if(playerRef.current) {
-        // Initial spawn
-        playerRef.current.position.set(0, 100, 100);
-        playerRef.current.rotation.y = Math.PI; 
-     }
-  }, []);
+        // --- Proximity Check for UI ---
+        if (gameState === GameState.PLAYING) {
+            const dist = Math.sqrt((player.position.x - MAZE_POS[0])**2 + (player.position.z - MAZE_POS[2])**2);
+            // Increased radius due to larger maze size
+            setNearMaze(dist < 400);
+        } else {
+            setNearMaze(false);
+        }
 
-  return <WizardPlayer ref={playerRef} mode={mode} />;
-};
+        // --- Toggle Mode ---
+        if (gameState !== GameState.MAZE && keys.current.q && !prevQ.current) {
+            const newMode = currentMode === PlayerMode.FLY ? PlayerMode.WALK : PlayerMode.FLY;
+            setMode(newMode);
+            velocity.current.y = 0; 
+        }
+        prevQ.current = keys.current.q;
+
+        // --- Physics Logic ---
+        const ROTATION_SPEED = 2.5;
+
+        if (currentMode === PlayerMode.FLY) {
+             const MAX_SPEED = keys.current.space ? 120.0 : 60.0;
+             const VERTICAL_SPEED = 30.0;
+             if (keys.current.a) player.rotation.y += ROTATION_SPEED * delta;
+             if (keys.current.d) player.rotation.y -= ROTATION_SPEED * delta;
+             let targetSpeed = 0;
+             if (keys.current.w) targetSpeed = MAX_SPEED;
+             if (keys.current.s) targetSpeed = -MAX_SPEED * 0.5;
+             velocity.current.x = THREE.MathUtils.lerp(velocity.current.x, targetSpeed, delta * 2);
+             const forward = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), player.rotation.y);
+             const displacement = forward.clone().multiplyScalar(velocity.current.x * delta);
+             let verticalMove = 0;
+             if (keys.current.shift) verticalMove = VERTICAL_SPEED * delta;
+             if (keys.current.control) verticalMove = -VERTICAL_SPEED * delta;
+             const nextPos = player.position.clone().add(displacement);
+             nextPos.y += verticalMove;
+             const terrainHeight = getTerrainHeight(nextPos.x, nextPos.z);
+             if (nextPos.y < terrainHeight + 2) {
+                 nextPos.y = terrainHeight + 2;
+                 if (verticalMove < 0) velocity.current.x *= 0.8;
+             }
+             player.position.copy(nextPos);
+             if(player.children[0]) {
+                 const targetTilt = keys.current.a ? 0.6 : (keys.current.d ? -0.6 : 0);
+                 const targetPitch = keys.current.w ? 0.3 : (keys.current.s ? -0.1 : 0);
+                 const inner = player.children[0] as THREE.Group; 
+                 inner.rotation.z = THREE.MathUtils.lerp(inner.rotation.z, targetTilt, delta * 4);
+                 inner.rotation.x = THREE.MathUtils.lerp(inner.rotation.x, targetPitch, delta * 4);
+             }
+        } else {
+            // WALK
+            const WALK_SPEED = 15.0;
+            const RUN_SPEED = 30.0;
+            const GRAVITY = 80.0;
+            const JUMP_FORCE = 30.0;
+            if (keys.current.a) player.rotation.y += ROTATION_SPEED * delta;
+            if (keys.current.d) player.rotation.y -= ROTATION_SPEED * delta;
+            const speed = keys.current.space ? RUN_SPEED : WALK_SPEED;
+            let moveForward = 0;
+            if (keys.current.w) moveForward = speed;
+            if (keys.current.s) moveForward = -speed;
+            const forward = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), player.rotation.y);
+            const displacement = forward.clone().multiplyScalar(moveForward * delta);
+            const nextPos = player.position.clone().add(displacement);
+            velocity.current.y -= GRAVITY * delta;
+            nextPos.y += velocity.current.y * delta;
+            const terrainHeight = getTerrainHeight(nextPos.x, nextPos.z);
+            const groundLevel = terrainHeight + 1.2;
+            if (nextPos.y <= groundLevel) {
+                nextPos.y = groundLevel;
+                velocity.current.y = 0;
+                if (keys.current.shift && gameState !== GameState.MAZE) {
+                    velocity.current.y = JUMP_FORCE;
+                }
+            }
+            
+            // Maze Collision
+            let blocked = false;
+            if (gameState === GameState.MAZE) {
+                const mazeWidth = mazeData.width * MAZE_CELL_SIZE;
+                const mazeHeight = mazeData.height * MAZE_CELL_SIZE;
+                const mazeOriginX = MAZE_POS[0] - mazeWidth / 2;
+                const mazeOriginZ = MAZE_POS[2] - mazeHeight / 2;
+                const isWall = (wx: number, wz: number) => {
+                    const gx = Math.floor((wx - mazeOriginX + MAZE_CELL_SIZE/2) / MAZE_CELL_SIZE);
+                    const gy = Math.floor((wz - mazeOriginZ + MAZE_CELL_SIZE/2) / MAZE_CELL_SIZE);
+                    if (gx < 0 || gx >= mazeData.width || gy < 0 || gy >= mazeData.height) return true;
+                    return mazeData.grid[gy][gx] === 1;
+                };
+                if (isWall(nextPos.x, nextPos.z)) {
+                    blocked = true;
+                    if (!isWall(nextPos.x, player.position.z)) { nextPos.z = player.position.z; blocked = false; }
+                    else if (!isWall(player.position.x, nextPos.z)) { nextPos.x = player.position.x; blocked = false; }
+                }
+                const gx = Math.floor((nextPos.x - mazeOriginX + MAZE_CELL_SIZE/2) / MAZE_CELL_SIZE);
+                const gy = Math.floor((nextPos.z - mazeOriginZ + MAZE_CELL_SIZE/2) / MAZE_CELL_SIZE);
+                if (gx === mazeData.end.x && gy === mazeData.end.y) {
+                    onWinMaze();
+                }
+            }
+
+            if (!blocked) player.position.copy(nextPos);
+
+             if(player.children[0]) {
+                const inner = player.children[0] as THREE.Group;
+                inner.rotation.z = THREE.MathUtils.lerp(inner.rotation.z, 0, delta * 5);
+                inner.rotation.x = THREE.MathUtils.lerp(inner.rotation.x, 0, delta * 5);
+             }
+        }
+
+        // Camera
+        const camDist = currentMode === PlayerMode.FLY ? 14 : 8;
+        const camHeight = currentMode === PlayerMode.FLY ? 6 : 4;
+        const camOffset = new THREE.Vector3(0, camHeight, camDist);
+        camOffset.applyAxisAngle(new THREE.Vector3(0, 1, 0), player.rotation.y);
+        const idealCamPos = player.position.clone().add(camOffset);
+        state.camera.position.lerp(idealCamPos, 0.1);
+        state.camera.lookAt(player.position.clone().add(new THREE.Vector3(0, 2, 0)));
+    });
+
+    return <WizardPlayer ref={playerRef} mode={mode} />;
+}
 
 
-// --- Main Scene ---
+const CinematicCamera = () => {
+    useFrame((state) => {
+        const t = state.clock.getElapsedTime();
+        state.camera.position.x = Math.sin(t * 0.05) * 400;
+        state.camera.position.z = Math.cos(t * 0.05) * 400;
+        state.camera.position.y = 150;
+        state.camera.lookAt(0, 50, 0);
+    });
+    return null;
+}
+
 interface GameSceneProps {
     gameState: GameState;
     weather: WeatherState;
+    setNearMaze: (near: boolean) => void;
+    setWinMaze: () => void;
 }
 
-const GameScene: React.FC<GameSceneProps> = ({ gameState, weather }) => {
+const GameScene: React.FC<GameSceneProps> = ({ gameState, weather, setNearMaze, setWinMaze }) => {
+  const mazeData = useMemo(() => generateMaze(MAZE_SIZE, MAZE_SIZE), []);
+  const playerCheckRef = useRef<THREE.Group>(null); // To track player pos for proximity outside of controller loop
+
+  // Wrapper for onWinMaze to handle scene logic if needed
+  const handleWin = () => {
+      setWinMaze();
+  };
+
   return (
     <Canvas shadows camera={{ fov: 70, position: [0, 10, 20], far: 15000 }}>
       <color attach="background" args={['#081020']} />
@@ -1427,6 +1633,8 @@ const GameScene: React.FC<GameSceneProps> = ({ gameState, weather }) => {
       <WhompingWillow />
       <Azkaban />
       <QuidditchPitch />
+      <Population />
+      <MazeStructure mazeData={mazeData} />
 
       {/* Weather */}
       <WeatherSystem weather={weather} />
@@ -1436,21 +1644,17 @@ const GameScene: React.FC<GameSceneProps> = ({ gameState, weather }) => {
       <Cloud position={[600, 200, 500]} opacity={0.2} speed={0.1} segments={20} color="#8899aa" />
 
       {/* Game Logic */}
-      {gameState === GameState.PLAYING && <PlayerController />}
+      {(gameState === GameState.PLAYING || gameState === GameState.MAZE) && (
+        <PlayerController 
+            gameState={gameState} 
+            mazeData={mazeData} 
+            onWinMaze={handleWin}
+            setNearMaze={setNearMaze}
+        />
+      )}
       {gameState === GameState.START && <CinematicCamera />}
     </Canvas>
   );
 };
-
-const CinematicCamera = () => {
-    useFrame((state) => {
-        const t = state.clock.getElapsedTime();
-        state.camera.position.x = Math.sin(t * 0.05) * 400;
-        state.camera.position.z = Math.cos(t * 0.05) * 400;
-        state.camera.position.y = 150;
-        state.camera.lookAt(0, 50, 0);
-    });
-    return null;
-}
 
 export default GameScene;
