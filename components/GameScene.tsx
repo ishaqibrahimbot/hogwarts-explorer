@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useState, useMemo } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import { Stars, Sky, Cloud, Sparkles, Environment, useTexture } from '@react-three/drei';
+import { Stars, Sky, Cloud, Sparkles, Environment } from '@react-three/drei';
 import * as THREE from 'three';
 import { GameState, TrainState } from '../types';
 
