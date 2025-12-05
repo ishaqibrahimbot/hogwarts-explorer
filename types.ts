@@ -4,6 +4,12 @@ export enum GameState {
   PLAYING = 'PLAYING',
 }
 
+export enum WeatherState {
+  CLEAR = 'CLEAR',
+  RAIN = 'RAIN',
+  SNOW = 'SNOW',
+}
+
 export interface PlayerControls {
   forward: boolean;
   backward: boolean; 

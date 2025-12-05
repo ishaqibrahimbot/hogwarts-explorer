@@ -2,7 +2,7 @@ import React, { useRef, useEffect, useState, useMemo } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { Stars, Sky, Cloud, Sparkles, Environment } from '@react-three/drei';
 import * as THREE from 'three';
-import { GameState, TrainState } from '../types';
+import { GameState, TrainState, WeatherState } from '../types';
 
 // --- Constants & Config ---
 const WORLD_SIZE = 10000;
@@ -101,6 +101,86 @@ const getTerrainHeight = (x: number, z: number) => {
   return y;
 };
 
+// --- Weather System ---
+const WeatherSystem = ({ weather }: { weather: WeatherState }) => {
+    const count = 3000;
+    const mesh = useRef<THREE.InstancedMesh>(null);
+    const { camera } = useThree();
+    
+    // Store individual particle data
+    const particles = useMemo(() => {
+        const temp = [];
+        for (let i = 0; i < count; i++) {
+            const x = (Math.random() - 0.5) * 400;
+            const y = Math.random() * 200;
+            const z = (Math.random() - 0.5) * 400;
+            const speed = 0.5 + Math.random(); 
+            temp.push({ x, y, z, speed, offset: Math.random() * 100 });
+        }
+        return temp;
+    }, []);
+
+    const dummy = useMemo(() => new THREE.Object3D(), []);
+
+    useFrame((state, delta) => {
+        if (!mesh.current || weather === WeatherState.CLEAR) return;
+
+        // Keep particles relative to camera so they travel with player
+        const cx = camera.position.x;
+        const cz = camera.position.z;
+        const cy = camera.position.y;
+
+        particles.forEach((p, i) => {
+            // Animate Y (Fall)
+            let fallSpeed = weather === WeatherState.RAIN ? 80 : 15;
+            p.y -= fallSpeed * delta * p.speed;
+
+            // Reset height
+            if (p.y < cy - 50) {
+                p.y = cy + 100;
+                p.x = (Math.random() - 0.5) * 300; // Reset X relative to center
+                p.z = (Math.random() - 0.5) * 300; // Reset Z relative to center
+            }
+
+            // Drift for snow
+            let driftX = 0;
+            if (weather === WeatherState.SNOW) {
+                driftX = Math.sin(state.clock.elapsedTime + p.offset) * 10 * delta;
+            }
+
+            dummy.position.set(cx + p.x + driftX, p.y, cz + p.z);
+            
+            // Rain stretches, Snow is round
+            if (weather === WeatherState.RAIN) {
+                dummy.scale.set(0.1, 2.5, 0.1);
+            } else {
+                dummy.scale.set(0.3, 0.3, 0.3);
+            }
+            
+            dummy.updateMatrix();
+            mesh.current!.setMatrixAt(i, dummy.matrix);
+        });
+        mesh.current.instanceMatrix.needsUpdate = true;
+    });
+
+    if (weather === WeatherState.CLEAR) return null;
+
+    return (
+        <instancedMesh ref={mesh} args={[undefined, undefined, count]} frustumCulled={false}>
+            {weather === WeatherState.RAIN ? (
+                <boxGeometry args={[0.2, 1, 0.2]} />
+            ) : (
+                <sphereGeometry args={[0.5, 4, 4]} />
+            )}
+            <meshBasicMaterial 
+                color={weather === WeatherState.RAIN ? "#aaddff" : "#ffffff"} 
+                transparent 
+                opacity={0.6} 
+            />
+        </instancedMesh>
+    );
+};
+
 // --- Assets: Textures & Materials ---
 const Terrain = () => {
   const meshRef = useRef<THREE.Mesh>(null);
@@ -109,13 +189,39 @@ const Terrain = () => {
     // Increased segments for larger world
     const geo = new THREE.PlaneGeometry(WORLD_SIZE, WORLD_SIZE, 256, 256);
     const pos = geo.attributes.position;
+    const colors = [];
+    const color = new THREE.Color();
     
     for (let i = 0; i < pos.count; i++) {
       const x = pos.getX(i);
       const z = pos.getY(i); 
       const height = getTerrainHeight(x, -z);
       pos.setZ(i, height);
+
+      // Vertex Coloring Logic
+      if (height < -15) {
+          // Sand/Underwater
+          color.set('#e0cda4');
+      } else if (height < 5) {
+          // Shore/Mud
+          color.set('#5d4037');
+      } else if (height < 120) {
+          // Grass with variation
+          // Simple noise based on position
+          const noise = Math.sin(x * 0.05) * Math.cos(z * 0.05);
+          if (noise > 0.2) color.set('#3a6b35'); // Darker Green
+          else color.set('#2d5a27'); // Standard Green
+      } else if (height < 180) {
+          // Rock/Mountain
+          color.set('#696969');
+      } else {
+          // Snow
+          color.set('#ffffff');
+      }
+      colors.push(color.r, color.g, color.b);
     }
+    
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
     geo.computeVertexNormals();
     return geo;
   }, []);
@@ -125,7 +231,7 @@ const Terrain = () => {
       {/* Land */}
       <mesh ref={meshRef} rotation={[-Math.PI / 2, 0, 0]} receiveShadow geometry={geometry}>
         <meshStandardMaterial 
-          color="#2d3a2d" 
+          vertexColors
           roughness={0.9} 
           metalness={0.1}
           flatShading
@@ -157,6 +263,134 @@ const Terrain = () => {
     </group>
   );
 };
+
+// --- Scatter: Grass, Rocks, Bushes ---
+const GroundDetails = () => {
+    const grassRef = useRef<THREE.InstancedMesh>(null);
+    const rockRef = useRef<THREE.InstancedMesh>(null);
+    const bushRef = useRef<THREE.InstancedMesh>(null);
+    
+    const dummy = useMemo(() => new THREE.Object3D(), []);
+
+    const GRASS_COUNT = 8000;
+    const ROCK_COUNT = 500;
+    const BUSH_COUNT = 600;
+
+    useEffect(() => {
+        // --- Generate Grass ---
+        if (grassRef.current) {
+            let idx = 0;
+            for(let i=0; i<GRASS_COUNT; i++) {
+                 // Random Position
+                 const x = (Math.random() - 0.5) * 5000;
+                 const z = (Math.random() - 0.5) * 5000;
+                 const y = getTerrainHeight(x, z);
+
+                 // Filter: Only on land, not too high (snow), not in water
+                 const isWater = y < 0;
+                 const isSnow = y > 150;
+                 // Avoid POIs roughly
+                 const distCastle = Math.sqrt((x-CASTLE_POS[0])**2 + (z-CASTLE_POS[2])**2);
+                 const distHogs = Math.sqrt((x-HOGSMEADE_POS[0])**2 + (z-HOGSMEADE_POS[2])**2);
+                 const distQuid = Math.sqrt((x-QUIDDITCH_POS[0])**2 + (z-QUIDDITCH_POS[2])**2);
+
+                 if (!isWater && !isSnow && distCastle > 150 && distHogs > 250 && distQuid > 200) {
+                     dummy.position.set(x, y, z);
+                     dummy.rotation.set(0, Math.random() * Math.PI, 0);
+                     const s = 0.5 + Math.random() * 1.5;
+                     dummy.scale.set(s, s, s);
+                     dummy.updateMatrix();
+                     grassRef.current.setMatrixAt(idx++, dummy.matrix);
+                 } else {
+                     // Hide unused
+                     dummy.position.set(0, -500, 0);
+                     dummy.updateMatrix();
+                     grassRef.current.setMatrixAt(i, dummy.matrix);
+                 }
+            }
+            grassRef.current.instanceMatrix.needsUpdate = true;
+        }
+
+        // --- Generate Rocks ---
+        if (rockRef.current) {
+             let idx = 0;
+             for(let i=0; i<ROCK_COUNT; i++) {
+                 const x = (Math.random() - 0.5) * 5000;
+                 const z = (Math.random() - 0.5) * 5000;
+                 const y = getTerrainHeight(x, z);
+                 
+                 // Rocks appear more on slopes/mountains or shores
+                 const isDeepWater = y < -10;
+                 const isFlat = y > 0 && y < 20; 
+
+                 if (!isDeepWater && (y > 50 || Math.random() > 0.7)) {
+                    dummy.position.set(x, y + 1, z); // Slightly embedded
+                    dummy.rotation.set(Math.random()*Math.PI, Math.random()*Math.PI, Math.random()*Math.PI);
+                    const s = 2 + Math.random() * 5;
+                    dummy.scale.set(s, s, s);
+                    dummy.updateMatrix();
+                    rockRef.current.setMatrixAt(idx++, dummy.matrix);
+                 } else {
+                    dummy.position.set(0, -500, 0);
+                    dummy.updateMatrix();
+                    rockRef.current.setMatrixAt(i, dummy.matrix);
+                 }
+             }
+             rockRef.current.instanceMatrix.needsUpdate = true;
+        }
+
+        // --- Generate Bushes ---
+        if (bushRef.current) {
+            let idx = 0;
+            for(let i=0; i<BUSH_COUNT; i++) {
+                const x = (Math.random() - 0.5) * 5000;
+                const z = (Math.random() - 0.5) * 5000;
+                const y = getTerrainHeight(x, z);
+
+                const isWater = y < 0;
+                const isSnow = y > 120;
+                const distCastle = Math.sqrt((x-CASTLE_POS[0])**2 + (z-CASTLE_POS[2])**2);
+
+                if (!isWater && !isSnow && distCastle > 100) {
+                   dummy.position.set(x, y + 1, z);
+                   dummy.rotation.set(0, Math.random() * Math.PI, 0);
+                   const s = 1.5 + Math.random() * 2;
+                   dummy.scale.set(s, s, s);
+                   dummy.updateMatrix();
+                   bushRef.current.setMatrixAt(idx++, dummy.matrix);
+                } else {
+                   dummy.position.set(0, -500, 0);
+                   dummy.updateMatrix();
+                   bushRef.current.setMatrixAt(i, dummy.matrix);
+                }
+            }
+            bushRef.current.instanceMatrix.needsUpdate = true;
+        }
+
+    }, [dummy]);
+
+    return (
+        <group>
+            {/* Grass (Green Tetrahedrons) */}
+            <instancedMesh ref={grassRef} args={[undefined, undefined, GRASS_COUNT]} frustumCulled={false}>
+                <coneGeometry args={[0.5, 2, 3]} /> {/* Low poly blade/tuft */}
+                <meshStandardMaterial color="#3a6b35" />
+            </instancedMesh>
+            
+            {/* Rocks (Grey Dodecahedrons) */}
+            <instancedMesh ref={rockRef} args={[undefined, undefined, ROCK_COUNT]} frustumCulled={false}>
+                <dodecahedronGeometry args={[1, 0]} />
+                <meshStandardMaterial color="#666" flatShading />
+            </instancedMesh>
+
+            {/* Bushes (Dark Green Icosahedrons) */}
+            <instancedMesh ref={bushRef} args={[undefined, undefined, BUSH_COUNT]} frustumCulled={false}>
+                <icosahedronGeometry args={[1, 0]} />
+                <meshStandardMaterial color="#1a3c1a" flatShading />
+            </instancedMesh>
+        </group>
+    )
+}
 
 // --- Hogsmeade Village ---
 const Hogsmeade = () => {
@@ -1038,21 +1272,22 @@ const FlightController = () => {
 // --- Main Scene ---
 interface GameSceneProps {
     gameState: GameState;
+    weather: WeatherState;
 }
 
-const GameScene: React.FC<GameSceneProps> = ({ gameState }) => {
+const GameScene: React.FC<GameSceneProps> = ({ gameState, weather }) => {
   return (
     <Canvas shadows camera={{ fov: 70, position: [0, 10, 20], far: 15000 }}>
       <color attach="background" args={['#081020']} />
       
       {/* Environment */}
       <Environment preset="night" />
-      <fogExp2 attach="fog" color="#081020" density={0.0002} /> 
+      <fogExp2 attach="fog" color={weather === WeatherState.SNOW ? "#cfd8dc" : "#081020"} density={weather === WeatherState.CLEAR ? 0.0002 : 0.001} /> 
       
       <Sky 
         sunPosition={[100, 10, 100]} 
-        turbidity={5} 
-        rayleigh={1} 
+        turbidity={weather === WeatherState.CLEAR ? 5 : 10} 
+        rayleigh={weather === WeatherState.CLEAR ? 1 : 4} 
         mieCoefficient={0.005} 
         mieDirectionalG={0.8}
         inclination={0.52} 
@@ -1062,13 +1297,13 @@ const GameScene: React.FC<GameSceneProps> = ({ gameState }) => {
       <Stars radius={15000} depth={100} count={10000} factor={8} saturation={0} fade speed={1} />
       
       {/* Increased Light Intensity */}
-      <ambientLight intensity={2.0} color="#8aa2b3" />
+      <ambientLight intensity={2.0} color={weather === WeatherState.SNOW ? "#ffffff" : "#8aa2b3"} />
       <hemisphereLight color="#87CEEB" groundColor="#374151" intensity={1.5} />
 
       <directionalLight 
         position={[200, 300, 100]} 
-        intensity={5.0} 
-        color="#dbeafe" 
+        intensity={weather === WeatherState.RAIN ? 2.0 : 5.0} 
+        color={weather === WeatherState.RAIN ? "#556677" : "#dbeafe"} 
         castShadow 
         shadow-mapSize={[2048, 2048]}
         shadow-bias={-0.0005}
@@ -1078,6 +1313,7 @@ const GameScene: React.FC<GameSceneProps> = ({ gameState }) => {
 
       {/* World */}
       <Terrain />
+      <GroundDetails />
       <Castle />
       <ForbiddenForest />
       <Hogsmeade />
@@ -1086,6 +1322,9 @@ const GameScene: React.FC<GameSceneProps> = ({ gameState }) => {
       <WhompingWillow />
       <Azkaban />
       <QuidditchPitch />
+
+      {/* Weather */}
+      <WeatherSystem weather={weather} />
 
       {/* Clouds */}
       <Cloud position={[-100, 150, -100]} opacity={0.2} speed={0.1} segments={20} color="#8899aa" />
